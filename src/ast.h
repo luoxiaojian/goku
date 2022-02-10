@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <unordered_map>
 
 #include "lexer/token.h"
 #include "object.h"
@@ -81,7 +82,12 @@ class Identifier : public Expression {
   std::shared_ptr<Object> Eval(std::shared_ptr<Environment> env) override {
     std::shared_ptr<Object> ret = env->Get(value);
     if (ret == nullptr) {
-      return std::make_shared<ErrorObject>("identifier not found: " + value);
+      auto iter = BuiltInTable.find(value);
+      if (iter == BuiltInTable.end()) {
+        return std::make_shared<ErrorObject>("identifier not found: " + value);
+      } else {
+        return std::make_shared<BuiltInObject>(iter->second);
+      }
     }
     return ret;
   }
@@ -253,9 +259,9 @@ class InfixExpression : public Expression {
       return std::make_shared<StringObject>(std::dynamic_pointer_cast<StringObject>(evaluated_left)->value
                                             + std::dynamic_pointer_cast<StringObject>(evaluated_right)->value);
     } else if (op == "==") {
-      return std::make_shared<BooleanObject>(ObjectEqual(evaluated_left, evaluated_right));
+      return std::make_shared<BooleanObject>(ObjectEqual()(evaluated_left, evaluated_right));
     } else if (op == "!=") {
-      return std::make_shared<BooleanObject>(!ObjectEqual(evaluated_left, evaluated_right));
+      return std::make_shared<BooleanObject>(!ObjectEqual()(evaluated_left, evaluated_right));
     } else {
       return std::make_shared<ErrorObject>("unkown operator "
                                            + ObjectTypeToString(evaluated_left->Type())
@@ -490,29 +496,44 @@ class CallExpression : public Expression {
     if (evaluated_function == nullptr) {
       return std::make_shared<ErrorObject>("function is null");
     }
-    if (evaluated_function->Type() != ObjectType::kFunction) {
-      return std::make_shared<ErrorObject>("not a function: " + ObjectTypeToString(evaluated_function->Type()));
-    }
-    std::shared_ptr<FunctionObject> casted_function = std::dynamic_pointer_cast<FunctionObject>(evaluated_function);
-    std::vector<std::shared_ptr<Object>> args;
-    for (auto exp : arguments) {
-      std::shared_ptr<Object> evaluated = exp->Eval(env);
-      if (evaluated != nullptr && evaluated->Type() == ObjectType::kError) {
-        return evaluated;
+    if (evaluated_function->Type() == ObjectType::kFunction) {
+      std::shared_ptr<FunctionObject> casted_function =
+          std::dynamic_pointer_cast<FunctionObject>(evaluated_function);
+      std::vector<std::shared_ptr<Object>> args;
+      for (auto exp : arguments) {
+        std::shared_ptr<Object> evaluated = exp->Eval(env);
+        if (evaluated != nullptr && evaluated->Type() == ObjectType::kError) {
+          return evaluated;
+        }
+        args.push_back(evaluated);
       }
-      args.push_back(evaluated);
-    }
 
-    std::shared_ptr<Environment> nested_env = std::make_shared<Environment>(casted_function->env);
-    int paramNum = casted_function->parameters.size();
-    for (int i = 0; i < paramNum; ++i) {
-      nested_env->Set(casted_function->parameters[i].value, args[i]);
-    }
-    std::shared_ptr<Object> ret = casted_function->body->Eval(nested_env);
-    if (ret != nullptr && ret->Type() == ObjectType::kReturnValue) {
-      return std::dynamic_pointer_cast<ReturnValueObject>(ret)->value;
+      std::shared_ptr<Environment> nested_env =
+          std::make_shared<Environment>(casted_function->env);
+      int paramNum = casted_function->parameters.size();
+      for (int i = 0; i < paramNum; ++i) {
+        nested_env->Set(casted_function->parameters[i].value, args[i]);
+      }
+      std::shared_ptr<Object> ret = casted_function->body->Eval(nested_env);
+      if (ret != nullptr && ret->Type() == ObjectType::kReturnValue) {
+        return std::dynamic_pointer_cast<ReturnValueObject>(ret)->value;
+      } else {
+        return ret;
+      }
+    } else if (evaluated_function->Type() == ObjectType::kBuiltIn) {
+      std::shared_ptr<BuiltInObject> casted_function =
+          std::dynamic_pointer_cast<BuiltInObject>(evaluated_function);
+      std::vector<std::shared_ptr<Object>> args;
+      for (auto exp : arguments) {
+        std::shared_ptr<Object> evaluated = exp->Eval(env);
+        if (evaluated != nullptr && evaluated->Type() == ObjectType::kError) {
+          return evaluated;
+        }
+        args.push_back(evaluated);
+      }
+      return casted_function->fn(args);
     } else {
-      return ret;
+      return std::make_shared<ErrorObject>("wrong type in call statement: " + ObjectTypeToString(evaluated_function->Type()));
     }
   }
 
@@ -521,5 +542,139 @@ class CallExpression : public Expression {
   std::vector<std::shared_ptr<Expression>> arguments;
 };
 
+class ArrayLiteral : public Expression {
+ public:
+  std::string TokenLiteral() override {
+    return token.literal;
+  }
+
+  void expressionNode() override {}
+
+  std::string String() override {
+    std::string ret = "[";
+    for (auto elem : elements) {
+      ret += elem->String();
+      ret += ", ";
+    }
+    ret += "]";
+    return ret;
+  }
+
+  std::shared_ptr<Object> Eval(std::shared_ptr<Environment> env) override {
+    std::shared_ptr<ArrayObject> arr = std::make_shared<ArrayObject>();
+    for (auto elem : elements) {
+      arr->objects.push_back(elem->Eval(env));
+    }
+    return arr;
+  }
+
+  Token token;
+  std::vector<std::shared_ptr<Expression>> elements;
+};
+
+class IndexExpression : public Expression {
+ public:
+  std::string TokenLiteral() override {
+    return token.literal;
+  }
+
+  void expressionNode() override {}
+
+  std::string String() override {
+    std::string ret = left->String();
+    ret += "[";
+    ret += right->String();
+    ret += "]";
+    return ret;
+  }
+
+  std::shared_ptr<Object> Eval(std::shared_ptr<Environment> env) override {
+    std::shared_ptr<Object> evaluated_left = left->Eval(env);
+    if (evaluated_left == nullptr || evaluated_left->Type() == ObjectType::kError) {
+      return evaluated_left;
+    }
+    if (evaluated_left->Type() == ObjectType::kArray) {
+      std::shared_ptr<ArrayObject> casted_left =
+          std::dynamic_pointer_cast<ArrayObject>(evaluated_left);
+      std::shared_ptr<Object> evaluated_right = right->Eval(env);
+      if (evaluated_right == nullptr ||
+          evaluated_right->Type() == ObjectType::kError) {
+        return evaluated_right;
+      }
+      if (evaluated_right->Type() != ObjectType::kInteger) {
+        return std::make_shared<ErrorObject>(
+            "index should be integer, got " +
+            ObjectTypeToString(evaluated_right->Type()));
+      }
+      int64_t index =
+          std::dynamic_pointer_cast<IntegerObject>(evaluated_right)->value;
+      if (index >= casted_left->objects.size()) {
+        return std::make_shared<ErrorObject>(
+            "index(" + std::to_string(index) + ") exceeds array size(" +
+            std::to_string(casted_left->objects.size()) + ")");
+      }
+      return casted_left->objects[index];
+    } else if (evaluated_left->Type() == ObjectType::kHash) {
+      std::shared_ptr<HashObject> casted_left = std::dynamic_pointer_cast<HashObject>(evaluated_left);
+      std::shared_ptr<Object> evaluated_right = right->Eval(env);
+      if (evaluated_right != nullptr && evaluated_left->Type() == ObjectType::kError) {
+        return evaluated_right;
+      }
+      auto iter = casted_left->table.find(evaluated_right);
+      if (iter == casted_left->table.end()) {
+        return std::make_shared<NullObject>();
+      } else {
+        return iter->second;
+      }
+    } else {
+      return std::make_shared<ErrorObject>
+          ("index operator not supported: " + ObjectTypeToString(evaluated_left->Type()));
+    }
+  }
+
+  Token token;
+  std::shared_ptr<Expression> left;
+  std::shared_ptr<Expression> right;
+};
+
+class HashLiteral : public Expression {
+ public:
+  std::string TokenLiteral() override {
+    return token.literal;
+  }
+
+  void expressionNode() override {}
+
+  std::string String() override {
+    std::string ret = "{";
+    for (auto& pair : pairs) {
+      ret += pair.first->String();
+      ret += ": ";
+      ret += pair.second->String();
+      ret += ", ";
+    }
+    ret += "}";
+    return ret;
+  }
+
+  std::shared_ptr<Object> Eval(std::shared_ptr<Environment> env) override {
+    std::shared_ptr<HashObject> ret = std::make_shared<HashObject>();
+    for (auto& pair : pairs) {
+      std::shared_ptr<Object> key = pair.first->Eval(env);
+      if (key != nullptr && key->Type() == ObjectType::kError) {
+        return key;
+      }
+      std::shared_ptr<Object> value = pair.second->Eval(env);
+      if (value != nullptr && value->Type() == ObjectType::kError) {
+        return value;
+      }
+      ret->table[key] = value;
+    }
+    return ret;
+  }
+
+  Token token;
+  std::unordered_map<std::shared_ptr<Expression>, std::shared_ptr<Expression>> pairs;
+};
 
 #endif  // SRC_AST_H_

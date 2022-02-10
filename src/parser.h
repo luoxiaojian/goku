@@ -15,6 +15,7 @@ static const int SUM = 4;
 static const int PRODUCT = 5;
 static const int PREFIX = 6;
 static const int CALL = 7;
+static const int INDEX = 8;
 
 static const std::map<TokenType, int> precedences = {
     {TokenType::kEQ, EQUALS},
@@ -26,6 +27,7 @@ static const std::map<TokenType, int> precedences = {
     {TokenType::kSlash, PRODUCT},
     {TokenType::kAsterisk, PRODUCT},
     {TokenType::kLParen, CALL},
+    {TokenType::kLBracket, INDEX},
 };
 
 class Parser {
@@ -115,6 +117,46 @@ class Parser {
       ret->value = curToken_.literal;
       return ret;
     });
+    registerPrefix(TokenType::kLBracket, [this]() -> std::shared_ptr<Expression> {
+      std::shared_ptr<ArrayLiteral> arr = std::make_shared<ArrayLiteral>();
+      arr->token = curToken_;
+      if (peekToken_.type == TokenType::kRBracket) {
+        nextToken();
+        return arr;
+      }
+      nextToken();
+      arr->elements.push_back(parseExpression(LOWEST));
+      while (peekToken_.type == TokenType::kComma) {
+        nextToken();
+        nextToken();
+        arr->elements.push_back(parseExpression(LOWEST));
+      }
+      if (!expectPeek(TokenType::kRBracket)) {
+        return nullptr;
+      }
+      return arr;
+    });
+    registerPrefix(TokenType::kLBrace, [this]() -> std::shared_ptr<Expression> {
+      std::shared_ptr<HashLiteral> table = std::make_shared<HashLiteral>();
+      table->token = curToken_;
+      while (peekToken_.type != TokenType::kRBrace) {
+        nextToken();
+        std::shared_ptr<Expression> key = parseExpression(LOWEST);
+        if (!expectPeek(TokenType::kColon)) {
+          return nullptr;
+        }
+        nextToken();
+        std::shared_ptr<Expression> value = parseExpression(LOWEST);
+        table->pairs[key] = value;
+        if (peekToken_.type != TokenType::kRBrace && !expectPeek(TokenType::kComma)) {
+          return nullptr;
+        }
+      }
+      if (!expectPeek(TokenType::kRBrace)) {
+        return nullptr;
+      }
+      return table;
+    });
     auto parseInfixExpression = [this](std::shared_ptr<Expression> left) {
       std::shared_ptr<InfixExpression> ret = std::make_shared<InfixExpression>();
       ret->token = curToken_;
@@ -138,6 +180,17 @@ class Parser {
       ret->token = curToken_;
       ret->function = function;
       ret->arguments = parseCallArguments();
+      return ret;
+    });
+    registerInfix(TokenType::kLBracket, [this](std::shared_ptr<Expression> arr) -> std::shared_ptr<Expression> {
+      std::shared_ptr<IndexExpression> ret = std::make_shared<IndexExpression>();
+      ret->token = curToken_;
+      ret->left = arr;
+      nextToken();
+      ret->right = parseExpression(LOWEST);
+      if (!expectPeek(TokenType::kRBracket)) {
+        return nullptr;
+      }
       return ret;
     });
   }
@@ -259,7 +312,7 @@ class Parser {
   }
 
   void noPrefixParseFnError(TokenType type) {
-    std::string msg = "no prefix parse function for " + std::to_string((int) type) + " found";
+    std::string msg = "no prefix parse function for " + TokenTypeToName(type) + " found";
     errors_.push_back(msg);
   }
 

@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <unordered_map>
 
 enum class ObjectType {
   kInteger,
@@ -14,6 +15,9 @@ enum class ObjectType {
   kError,
   kFunction,
   kString,
+  kBuiltIn,
+  kArray,
+  kHash,
 };
 
 inline std::string ObjectTypeToString(ObjectType type) {
@@ -23,6 +27,10 @@ inline std::string ObjectTypeToString(ObjectType type) {
   case ObjectType::kNull: return "Null";
   case ObjectType::kReturnValue: return "ReturnValue";
   case ObjectType::kError: return "Error";
+  case ObjectType::kFunction: return "Function";
+  case ObjectType::kBuiltIn: return "BuiltIn";
+  case ObjectType::kArray: return "Array";
+  case ObjectType::kHash: return "Hash";
   default: return "Unknown";
   }
 }
@@ -31,6 +39,8 @@ class Object {
  public:
   virtual ObjectType Type() = 0;
   virtual std::string Inspect() = 0;
+
+  virtual size_t Hash() const = 0;
 };
 
 class IntegerObject : public Object {
@@ -43,6 +53,10 @@ class IntegerObject : public Object {
 
   std::string Inspect() override {
     return std::to_string(value);
+  }
+
+  size_t Hash() const override {
+    return std::hash<int64_t>()(value);
   }
 
   int64_t value;
@@ -60,6 +74,10 @@ class BooleanObject : public Object {
     return value ? "true" : "false";
   }
 
+  size_t Hash() const override {
+    return std::hash<bool>()(value);
+  }
+
   bool value;
 };
 
@@ -71,6 +89,10 @@ class NullObject : public Object {
 
   std::string Inspect() override {
     return "null";
+  }
+
+  size_t Hash() const override {
+    return 0;
   }
 };
 
@@ -86,6 +108,10 @@ class ReturnValueObject : public Object {
     return value->Inspect();
   }
 
+  size_t Hash() const override {
+    return 1;
+  }
+
   std::shared_ptr<Object> value;
 };
 
@@ -99,6 +125,10 @@ class ErrorObject : public Object {
     return "Error: " + message;
   }
 
+  size_t Hash() const override {
+    return 2;
+  }
+
   std::string message;
 };
 
@@ -110,6 +140,10 @@ class StringObject : public Object {
 
   std::string Inspect() override {
     return value;
+  }
+
+  size_t Hash() const override {
+    return std::hash<std::string>()(value);
   }
 
   std::string value;
@@ -128,27 +162,109 @@ class FunctionObject : public Object {
 
   std::string Inspect() override;
 
+  size_t Hash() const override {
+    return 3;
+  }
+
   std::vector<Identifier> parameters;
   std::shared_ptr<BlockStatement> body;
   std::shared_ptr<Environment> env;
 };
 
-inline bool ObjectEqual(std::shared_ptr<Object> left, std::shared_ptr<Object> right) {
-  if (left->Type() != right->Type()) {
-    return false;
+using BuiltInFnType = std::function<std::shared_ptr<Object>(std::vector<std::shared_ptr<Object>>)>;
+
+class BuiltInObject : public Object {
+ public:
+  BuiltInObject(const BuiltInFnType& f) : fn(f) {}
+
+  ObjectType Type() override { return ObjectType::kBuiltIn; }
+
+  std::string Inspect() override { return "builtin function"; }
+
+  size_t Hash() const override {
+    return 4;
   }
-  if (left->Type() == ObjectType::kInteger) {
-    int64_t left_value = std::dynamic_pointer_cast<IntegerObject>(left)->value;
-    int64_t right_value = std::dynamic_pointer_cast<IntegerObject>(right)->value;
-    return left_value == right_value;
-  } else if (left->Type() == ObjectType::kBoolean) {
-    int64_t left_value = std::dynamic_pointer_cast<BooleanObject>(left)->value;
-    int64_t right_value = std::dynamic_pointer_cast<BooleanObject>(right)->value;
-    return left_value == right_value;
-  } else {
-    return true;
+
+  BuiltInFnType fn;
+};
+
+class ArrayObject : public Object {
+ public:
+  ArrayObject() {}
+
+  ObjectType Type() override { return ObjectType::kArray; }
+
+  std::string Inspect() override {
+    std::string ret = "[";
+    for (auto obj : objects) {
+      ret += obj->Inspect();
+      ret += ",";
+    }
+    ret += "]";
+    return ret;
   }
-}
+
+  size_t Hash() const override {
+    return 5;
+  }
+
+  std::vector<std::shared_ptr<Object>> objects;
+};
+
+struct ObjectHash {
+  size_t operator()(std::shared_ptr<Object> obj) const noexcept {
+    return obj->Hash();
+  }
+};
+
+struct ObjectEqual {
+  bool operator()(std::shared_ptr<Object> lhs, std::shared_ptr<Object> rhs) const;
+};
+
+class HashObject : public Object {
+ public:
+  HashObject() {}
+
+  ObjectType Type() override {
+    return ObjectType::kHash;
+  }
+
+  std::string Inspect() override {
+    std::string ret = "[";
+    for (auto& pair : table) {
+      ret += pair.first->Inspect();
+      ret += ": ";
+      ret += pair.second->Inspect();
+      ret += ",";
+    }
+    ret += "]";
+    return ret;
+  }
+
+  size_t Hash() const override {
+    return 6;
+  }
+
+  std::unordered_map<std::shared_ptr<Object>, std::shared_ptr<Object>,
+                     ObjectHash, ObjectEqual> table;
+};
+
+// inline bool ObjectEqual(std::shared_ptr<Object> left, std::shared_ptr<Object> right) {
+//   if (left->Type() != right->Type()) {
+//     return false;
+//   }
+//   if (left->Type() == ObjectType::kInteger) {
+//     int64_t left_value = std::dynamic_pointer_cast<IntegerObject>(left)->value;
+//     int64_t right_value = std::dynamic_pointer_cast<IntegerObject>(right)->value;
+//     return left_value == right_value;
+//   } else if (left->Type() == ObjectType::kBoolean) {
+//     int64_t left_value = std::dynamic_pointer_cast<BooleanObject>(left)->value;
+//     int64_t right_value = std::dynamic_pointer_cast<BooleanObject>(right)->value;
+//     return left_value == right_value;
+//   } else {
+//     return true;
+//   }
+// }
 
 inline bool IsTruthy(std::shared_ptr<Object> obj) {
   if (obj->Type() == ObjectType::kInteger) {
@@ -192,5 +308,7 @@ class Environment {
   std::map<std::string, std::shared_ptr<Object>> objects;
   std::shared_ptr<Environment> outer;
 };
+
+extern const std::map<std::string, BuiltInFnType> BuiltInTable;
 
 #endif  // SRC_OBJECT_H_

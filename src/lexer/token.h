@@ -19,11 +19,14 @@ enum class TokenType {
   kLT,
   kGT,
   kComma,
+  kColon,
   kSemicolon,
   kLParen,
   kRParen,
   kLBrace,
   kRBrace,
+  kLBracket,
+  kRBracket,
   kFunction,
   kLet,
   kTrue,
@@ -62,6 +65,8 @@ inline std::string TokenTypeToName(TokenType type) {
     return "GT";
   case TokenType::kComma:
     return "Comma";
+  case TokenType::kColon:
+    return "Colon";
   case TokenType::kSemicolon:
     return "Semicolon";
   case TokenType::kLParen:
@@ -72,6 +77,10 @@ inline std::string TokenTypeToName(TokenType type) {
     return "LBrace";
   case TokenType::kRBrace:
     return "RBrace";
+  case TokenType::kLBracket:
+    return "LBracket";
+  case TokenType::kRBracket:
+    return "RBracket";
   case TokenType::kFunction:
     return "Function";
   case TokenType::kLet:
@@ -107,11 +116,14 @@ static const std::map<char, TokenType> CharTokenTypeMap = {
     {'<', TokenType::kLT},
     {'>', TokenType::kGT},
     {',', TokenType::kComma},
+    {':', TokenType::kColon},
     {';', TokenType::kSemicolon},
     {'(', TokenType::kLParen},
     {')', TokenType::kRParen},
     {'{', TokenType::kLBrace},
     {'}', TokenType::kRBrace},
+    {'[', TokenType::kLBracket},
+    {']', TokenType::kRBracket},
 };
 
 static const std::map<std::string, TokenType> TokenTypeMap = {
